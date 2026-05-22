@@ -1,0 +1,38 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "microcodegen"
+version = "0.1.0"
+description = "PRD text to production Flask app in one Python file. The Archiet core algorithm, standalone."
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.10"
+keywords = ["codegen", "flask", "code-generation", "prd", "archiet"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Code Generators",
+]
+dependencies = []
+
+[project.scripts]
+microcodegen = "microcodegen:main"
+
+[project.urls]
+Homepage = "https://archiet.com"
+Repository = "https://github.com/Anioko/microcodegen"
+"Bug Tracker" = "https://github.com/Anioko/microcodegen/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["."]
+include = ["microcodegen.py"]
+
+[tool.hatch.build.targets.sdist]
+include = ["microcodegen.py", "README.md", "examples/"]
