@@ -1,0 +1,82 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    name: Generate apps from example PRDs
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Verify microcodegen.py has zero non-stdlib imports
+        run: |
+          python - <<'EOF'
+          import ast, sys
+          src = open("microcodegen.py").read()
+          tree = ast.parse(src)
+          stdlib = {
+              "argparse","io","json","re","secrets","string","sys",
+              "zipfile","pathlib","os","typing","__future__","datetime",
+              "collections","itertools","functools","textwrap","hashlib",
+          }
+          bad = []
+          for node in ast.walk(tree):
+              if isinstance(node, ast.Import):
+                  for alias in node.names:
+                      name = alias.name.split(".")[0]
+                      if name not in stdlib:
+                          bad.append(name)
+              elif isinstance(node, ast.ImportFrom):
+                  if node.module:
+                      name = node.module.split(".")[0]
+                      if name not in stdlib:
+                          bad.append(name)
+          if bad:
+              print(f"Non-stdlib imports found: {bad}", file=sys.stderr)
+              sys.exit(1)
+          print("✓ Zero non-stdlib imports")
+          EOF
+
+      - name: Generate app from task_manager.md
+        run: |
+          python microcodegen.py examples/task_manager.md --out /tmp/task-app
+          echo "Generated files:"
+          find /tmp/task-app -type f | sort
+          # Verify key files exist
+          test -f /tmp/task-app/config.py         && echo "✓ config.py"
+          test -f /tmp/task-app/requirements.txt  && echo "✓ requirements.txt"
+          test -f /tmp/task-app/docker-compose.yml && echo "✓ docker-compose.yml"
+          # At least 5 files generated
+          count=$(find /tmp/task-app -type f | wc -l)
+          echo "Total files: $count"
+          [ "$count" -ge 5 ] || (echo "Too few files generated" && exit 1)
+
+      - name: Generate app from saas_billing.md
+        run: |
+          python microcodegen.py examples/saas_billing.md --out /tmp/billing-app
+          count=$(find /tmp/billing-app -type f | wc -l)
+          echo "Generated $count files from saas_billing.md"
+          [ "$count" -ge 5 ] || (echo "Too few files generated" && exit 1)
+
+      - name: Generate app from ecommerce.md
+        run: |
+          python microcodegen.py examples/ecommerce.md --out /tmp/ecommerce-app
+          count=$(find /tmp/ecommerce-app -type f | wc -l)
+          echo "Generated $count files from ecommerce.md"
+          [ "$count" -ge 5 ] || (echo "Too few files generated" && exit 1)
+
+      - name: Verify ZIP output mode
+        run: |
+          python microcodegen.py examples/task_manager.md > /tmp/app.zip
+          python -c "import zipfile; z=zipfile.ZipFile('/tmp/app.zip'); print(f'✓ ZIP contains {len(z.namelist())} files')"
