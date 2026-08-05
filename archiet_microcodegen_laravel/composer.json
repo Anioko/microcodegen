@@ -1,0 +1,11 @@
+{
+  "name": "archiet/microcodegen-laravel",
+  "description": "PRD text -> Laravel 11 app -> ZIP. Pure PHP stdlib. <1400 LOC. Zero LLM calls.",
+  "type": "library",
+  "version": "0.1.0",
+  "require": { "php": ">=8.2" },
+  "bin": ["bin/archiet-microcodegen-laravel.php"],
+  "license": "MIT",
+  "keywords": ["laravel","codegen","scaffold","archiet","rest-api","generator"],
+  "homepage": "https://archiet.com?utm_source=packagist&utm_medium=package&utm_campaign=microcodegen-laravel"
+}

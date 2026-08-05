@@ -1,0 +1,18 @@
+# Build output — never commit. The Tauri renderer previously carried 251
+# tracked files and 17.3 MB of Rust build artifacts into git; the actual
+# source is four files totalling 22 KB.
+target/
+dist/
+build/
+*.egg-info/
+__pycache__/
+*.py[cod]
+node_modules/
+vendor/
+bin/
+obj/
+.venv/
+venv/
+*.class
+*.jar
+!**/gradle/wrapper/gradle-wrapper.jar

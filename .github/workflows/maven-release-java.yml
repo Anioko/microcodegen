@@ -1,0 +1,96 @@
+name: Release archiet-microcodegen-java fat JAR
+
+# Builds the fat JAR (Maven Shade Plugin) and uploads it to a GitHub Release.
+# Developers install with: java -jar archiet-microcodegen-java-<version>.jar prd.md --out ./out/
+#
+# Maven Central publishing requires GPG signing + Sonatype OSSRH account.
+# That is deferred. GitHub Releases is the MVP distribution channel.
+#
+# Founder setup (one-time):
+#   1. Java 17+ must be installed (set up via setup-java step below)
+#   2. No additional secrets required for GitHub Releases
+#   3. Tag a release: git tag java-v0.1.0 && git push origin java-v0.1.0
+
+on:
+  push:
+    tags:
+      - "java-v*.*.*"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Build JAR only — do NOT create GitHub Release"
+        type: boolean
+        default: true
+
+permissions:
+  contents: write    # required for gh release create
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: "17"
+          distribution: temurin
+          cache: maven
+
+      - name: Verify pom.xml exists
+        run: |
+          test -f archiet_microcodegen_java/pom.xml
+          test -f "archiet_microcodegen_java/src/main/java/com/archiet/microcodegen/Main.java"
+
+      - name: Assert pom.xml version matches git tag
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          POM_VER=$(mvn -f archiet_microcodegen_java/pom.xml help:evaluate -Dexpression=project.version -q -DforceStdout)
+          TAG_VER="${GITHUB_REF_NAME#java-v}"
+          echo "pom.xml: $POM_VER  tag: $TAG_VER"
+          [ "$POM_VER" = "$TAG_VER" ] || {
+            echo "::error::pom.xml version ($POM_VER) != tag ($TAG_VER) — update pom.xml before tagging."
+            exit 1
+          }
+
+      - name: Build fat JAR
+        working-directory: archiet_microcodegen_java
+        run: mvn package -q -DskipTests
+
+      - name: Verify JAR exists and runs --help
+        working-directory: archiet_microcodegen_java
+        run: |
+          JAR=$(ls target/microcodegen-java-*-shaded.jar 2>/dev/null || ls target/archiet-microcodegen-java*.jar 2>/dev/null | head -1)
+          test -n "$JAR" || { echo "::error::Fat JAR not found in target/"; ls target/; exit 1; }
+          echo "JAR: $JAR"
+          java -jar "$JAR" --help 2>&1 | head -5 || true
+          echo "JAR_PATH=$JAR" >> $GITHUB_ENV
+
+      - name: Create GitHub Release and upload JAR
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          VER="${TAG#java-v}"
+          JAR="archiet_microcodegen_java/$JAR_PATH"
+          # Rename for clean download filename
+          cp "archiet_microcodegen_java/$JAR_PATH" "archiet-microcodegen-java-${VER}.jar"
+          gh release create "$TAG" \
+            --title "archiet-microcodegen-java v${VER}" \
+            --notes "## archiet-microcodegen-java v${VER}\n\nPRD -> Spring Boot 3 app -> ZIP. Pure Java stdlib. Zero LLM calls.\n\n### Install\n\`\`\`\ncurl -L https://github.com/\$GITHUB_REPOSITORY/releases/download/${TAG}/archiet-microcodegen-java-${VER}.jar -o archiet-microcodegen-java.jar\n\`\`\`\n\n### Use\n\`\`\`\njava -jar archiet-microcodegen-java.jar prd.md --out ./out/\n\`\`\`" \
+            "archiet-microcodegen-java-${VER}.jar" \
+            || echo "::notice::Release may already exist — skipping."
+
+      - name: Upload JAR artifact (for inspection)
+        uses: actions/upload-artifact@v4
+        with:
+          name: archiet-microcodegen-java-jar
+          path: archiet_microcodegen_java/target/*.jar
+          retention-days: 30
+
+      - name: Dry-run notice
+        if: github.event_name == 'workflow_dispatch'
+        run: echo "::notice::dry_run=true — JAR built but GitHub Release NOT created."

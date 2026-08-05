@@ -1,0 +1,140 @@
+﻿name: Publish archiet-microcodegen-laravel to Packagist
+
+# Packagist requires composer.json at the root of a standalone GitHub repo.
+# Because the Laravel package lives in archiet_microcodegen_laravel/ (monorepo
+# subdirectory), this workflow first syncs it to the external standalone repo
+# https://github.com/aniekanasuquookono-web/archiet-microcodegen-laravel,
+# then pings Packagist to re-index from that repo.
+#
+# Founder setup (one-time):
+#   1. Create PAT with Contents: Read+Write on archiet-microcodegen-laravel
+#      Add as secret: MICROCODEGEN_LARAVEL_PAT
+#   2. Register the package at https://packagist.org/packages/submit
+#      Use URL: https://github.com/aniekanasuquookono-web/archiet-microcodegen-laravel
+#      Package name: archiet/microcodegen-laravel
+#   3. Get your Packagist API token at https://packagist.org/profile/
+#      Add as secret: PACKAGIST_API_TOKEN  (username on Packagist: archiet)
+#   4. Tag a release: git tag laravel-v0.1.0 && git push origin laravel-v0.1.0
+
+on:
+  push:
+    tags:
+      - "laravel-v*.*.*"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Sync to external repo but do NOT ping Packagist"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  sync-and-publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up PHP 8.2
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: "8.2"
+
+      - name: Verify composer.json and PHP files exist
+        run: |
+          test -f archiet_microcodegen_laravel/composer.json
+          test -f archiet_microcodegen_laravel/bin/archiet-microcodegen-laravel.php
+
+      - name: Syntax-check PHP generator
+        run: php -l archiet_microcodegen_laravel/bin/archiet-microcodegen-laravel.php
+
+      - name: Validate composer.json
+        working-directory: archiet_microcodegen_laravel
+        run: composer validate --no-check-all --no-interaction
+
+      - name: Assert composer.json version matches tag
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          PKG_VER=$(php -r "echo json_decode(file_get_contents('archiet_microcodegen_laravel/composer.json'))->version;")
+          TAG_VER="${GITHUB_REF_NAME#laravel-v}"
+          echo "composer.json: $PKG_VER  tag: $TAG_VER"
+          [ "$PKG_VER" = "$TAG_VER" ] || {
+            echo "::error::Version mismatch - update version in composer.json to $TAG_VER before tagging."
+            exit 1
+          }
+
+      - name: Verify MICROCODEGEN_LARAVEL_PAT is set
+        env:
+          MICROCODEGEN_LARAVEL_PAT: ${{ secrets.MICROCODEGEN_LARAVEL_PAT }}
+        run: |
+          if [ -z "$MICROCODEGEN_LARAVEL_PAT" ]; then
+            echo "::error::MICROCODEGEN_LARAVEL_PAT secret is not set." >&2
+            exit 1
+          fi
+          echo "MICROCODEGEN_LARAVEL_PAT present"
+
+      - name: Sync to external repo
+        env:
+          MICROCODEGEN_LARAVEL_PAT: ${{ secrets.MICROCODEGEN_LARAVEL_PAT }}
+          DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
+        run: |
+          git config --global user.email "ci@archiet.com"
+          git config --global user.name "Archiet CI"
+          git clone https://x-access-token:${MICROCODEGEN_LARAVEL_PAT}@github.com/aniekanasuquookono-web/archiet-microcodegen-laravel ext-laravel
+          cp -r archiet_microcodegen_laravel/. ext-laravel/
+          cd ext-laravel
+          git add -A
+          if git diff --staged --quiet; then
+            echo "No file changes."
+          else
+            git commit -m "chore: sync from archiet monorepo ${GITHUB_SHA::7}"
+            if [ "$DRY_RUN" != "true" ]; then
+              git push origin main
+            else
+              echo "::notice::dry_run - not pushing to external repo."
+            fi
+          fi
+
+      - name: Tag external repo
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          MICROCODEGEN_LARAVEL_PAT: ${{ secrets.MICROCODEGEN_LARAVEL_PAT }}
+        run: |
+          TAG_VER="${GITHUB_REF_NAME#laravel-v}"
+          echo "Tagging external repo as $TAG_VER"
+          cd ext-laravel
+          if git rev-parse "$TAG_VER" >/dev/null 2>&1; then
+            echo "::notice::Tag $TAG_VER already exists in external repo - skipping."
+          else
+            git tag "$TAG_VER" -m "Release $TAG_VER"
+            git push origin "$TAG_VER"
+            echo "::notice::Tagged external repo as $TAG_VER"
+          fi
+
+      - name: Ping Packagist to re-index
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          PACKAGIST_API_TOKEN: ${{ secrets.PACKAGIST_API_TOKEN }}
+        run: |
+          if [ -z "$PACKAGIST_API_TOKEN" ]; then
+            echo "::warning::PACKAGIST_API_TOKEN not set - skipping Packagist ping."
+            echo "Register at https://packagist.org/packages/submit using URL:"
+            echo "  https://github.com/aniekanasuquookono-web/archiet-microcodegen-laravel"
+            exit 0
+          fi
+          HTTP=$(curl -s -o /tmp/packagist_resp.json -w "%{http_code}" \
+            -X POST "https://packagist.org/api/update-package?username=archiet&apiToken=${PACKAGIST_API_TOKEN}" \
+            -H "Content-Type: application/json" \
+            -d '{"repository":{"url":"https://github.com/aniekanasuquookono-web/archiet-microcodegen-laravel"}}')
+          echo "Packagist HTTP status: $HTTP"
+          cat /tmp/packagist_resp.json
+          [ "$HTTP" = "202" ] || [ "$HTTP" = "200" ] || {
+            echo "::error::Packagist ping failed (HTTP $HTTP)"; exit 1;
+          }
+          echo "::notice::Packagist re-index triggered for archiet/microcodegen-laravel."
+
+      - name: Dry-run notice
+        if: github.event_name == 'workflow_dispatch'
+        run: echo "::notice::dry_run=true - validated and synced to external repo, but NOT pinged Packagist."

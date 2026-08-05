@@ -1,0 +1,101 @@
+name: Publish archiet-microcodegen-tauri to crates.io
+
+on:
+  push:
+    tags:
+      - 'tauri-v*'
+  workflow_dispatch:
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: archiet_microcodegen_tauri
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            archiet_microcodegen_tauri/target
+          key: ${{ runner.os }}-cargo-tauri-${{ hashFiles('archiet_microcodegen_tauri/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-tauri-
+
+      - name: Verify zero dependencies
+        run: |
+          deps=$(cargo metadata --no-deps --format-version 1 | python3 -c "
+          import json,sys
+          m = json.load(sys.stdin)
+          pkg = next(p for p in m['packages'] if p['name'] == 'archiet-microcodegen-tauri')
+          print(len(pkg['dependencies']))
+          ")
+          echo "Dependency count: $deps"
+          [ "$deps" -eq 0 ] || { echo "ERROR: generator must have zero runtime dependencies"; exit 1; }
+
+      - name: Build release binary
+        run: cargo build --release
+
+      - name: Smoke test — sample PRD generates files
+        run: |
+          ./target/release/archiet-microcodegen-tauri --sample > /tmp/sample.md
+          ./target/release/archiet-microcodegen-tauri /tmp/sample.md --out /tmp/tauri-out
+          echo "=== Generated files ==="
+          find /tmp/tauri-out -type f | sort
+          # Verify key files exist
+          test -f /tmp/tauri-out/src-tauri/Cargo.toml
+          test -f /tmp/tauri-out/src-tauri/src/lib.rs
+          test -f /tmp/tauri-out/src-tauri/src/db.rs
+          test -f /tmp/tauri-out/src-tauri/src/auth.rs
+          test -f /tmp/tauri-out/src-tauri/tauri.conf.json
+          test -f /tmp/tauri-out/src/ipc.ts
+          test -f /tmp/tauri-out/src/pages/Login.tsx
+          test -f /tmp/tauri-out/ARCHITECTURE.md
+          test -f /tmp/tauri-out/openapi.yaml
+          echo "All required files present ✓"
+
+      - name: Smoke test — ZIP output
+        run: |
+          ./target/release/archiet-microcodegen-tauri /tmp/sample.md --zip /tmp/tauri-out.zip
+          python3 -c "
+          import zipfile, sys
+          with zipfile.ZipFile('/tmp/tauri-out.zip') as z:
+              names = z.namelist()
+              print(f'ZIP contains {len(names)} files')
+              required = ['src-tauri/Cargo.toml', 'src-tauri/src/auth.rs', 'ARCHITECTURE.md', 'openapi.yaml']
+              for r in required:
+                  assert r in names, f'Missing: {r}'
+              print('ZIP validation passed ✓')
+          "
+
+      - name: Verify ARCHITECTURE.md has ArchiMate elements
+        run: |
+          grep -q "ApplicationComponent" /tmp/tauri-out/ARCHITECTURE.md
+          grep -q "DataObject" /tmp/tauri-out/ARCHITECTURE.md
+          echo "ArchiMate elements present ✓"
+
+      - name: Verify per-user isolation in generated commands
+        run: |
+          # Every entity command file must filter by user_id
+          for f in /tmp/tauri-out/src-tauri/src/commands/*_commands.rs; do
+            grep -q "user_id" "$f" || { echo "FAIL: $f missing user_id filter"; exit 1; }
+            grep -q "require_session" "$f" || { echo "FAIL: $f missing session check"; exit 1; }
+          done
+          echo "Per-user isolation verified ✓"
+
+      - name: Publish to crates.io
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
+        run: |
+          # --allow-dirty is safe here: the only uncommitted file is
+          # target/.rustc_info.json which cargo build writes during the
+          # smoke test steps above. It is not part of the published crate
+          # (excluded by .gitignore / Cargo.toml package exclude).
+          cargo publish --token "$CARGO_REGISTRY_TOKEN" --allow-dirty

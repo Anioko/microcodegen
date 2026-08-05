@@ -1,0 +1,99 @@
+name: Publish archiet-microcodegen-go to pkg.go.dev
+
+# pkg.go.dev auto-indexes Go modules from GitHub once a semver tag exists.
+# Because the Go module path is github.com/aniekanasuquookono-web/archiet-microcodegen-go,
+# the files must live in the separate repo archiet-microcodegen-go (go install requires
+# a module at the root of its own repo, not a monorepo subdirectory).
+#
+# This workflow syncs archiet_microcodegen_go/ -> the external repo and tags it.
+#
+# Founder setup (one-time):
+#   1. Create repo https://github.com/aniekanasuquookono-web/archiet-microcodegen-go
+#   2. Create a fine-grained PAT with Contents: Read+Write on that repo
+#   3. Add it as secret: MICROCODEGEN_GO_PAT
+#   4. Tag a release: git tag go-v0.1.0 && git push origin go-v0.1.0
+
+on:
+  push:
+    tags:
+      - "go-v*.*.*"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Sync to external repo but do NOT tag (no pkg.go.dev publish)"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  sync-and-tag:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify Go source exists
+        run: |
+          test -d archiet_microcodegen_go
+          test -f archiet_microcodegen_go/go.mod
+          test -f archiet_microcodegen_go/main.go
+
+      - name: Assert go.mod module matches external repo
+        run: |
+          MOD=$(grep '^module ' archiet_microcodegen_go/go.mod | awk '{print $2}')
+          echo "Module path: $MOD"
+          [ "$MOD" = "github.com/aniekanasuquookono-web/archiet-microcodegen-go" ] || {
+            echo "::error::go.mod module must be github.com/aniekanasuquookono-web/archiet-microcodegen-go"; exit 1;
+          }
+
+      - name: Verify MICROCODEGEN_GO_PAT is set
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          MICROCODEGEN_GO_PAT: ${{ secrets.MICROCODEGEN_GO_PAT }}
+        run: |
+          if [ -z "$MICROCODEGEN_GO_PAT" ]; then
+            echo "::error::MICROCODEGEN_GO_PAT secret is not set." >&2
+            exit 1
+          fi
+          echo "MICROCODEGEN_GO_PAT present"
+
+      - name: Sync to external repo
+        env:
+          MICROCODEGEN_GO_PAT: ${{ secrets.MICROCODEGEN_GO_PAT }}
+          DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
+        run: |
+          git config --global user.email "ci@archiet.com"
+          git config --global user.name "Archiet CI"
+          git clone https://x-access-token:${MICROCODEGEN_GO_PAT}@github.com/aniekanasuquookono-web/archiet-microcodegen-go ext-go
+          cp -r archiet_microcodegen_go/. ext-go/
+          cd ext-go
+          git add -A
+          if git diff --staged --quiet; then
+            echo "No file changes."
+          else
+            git commit -m "chore: sync from archiet monorepo ${GITHUB_SHA::7}"
+            if [ "$DRY_RUN" != "true" ]; then
+              git push origin main
+            else
+              echo "::notice::dry_run — not pushing to external repo."
+            fi
+          fi
+
+      - name: Tag external repo
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          MICROCODEGEN_GO_PAT: ${{ secrets.MICROCODEGEN_GO_PAT }}
+        run: |
+          # Tag format for go install: v0.1.0 (strip the "go-" monorepo prefix)
+          TAG_VER="${GITHUB_REF_NAME#go-}"
+          echo "Tagging external repo as $TAG_VER"
+          cd ext-go
+          if git rev-parse "$TAG_VER" >/dev/null 2>&1; then
+            echo "::notice::Tag $TAG_VER already exists in external repo — skipping."
+          else
+            git tag "$TAG_VER" -m "Release $TAG_VER"
+            git push origin "$TAG_VER"
+            echo "::notice::Tagged external repo as $TAG_VER — pkg.go.dev will index within minutes."
+          fi

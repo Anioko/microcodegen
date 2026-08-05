@@ -1,0 +1,108 @@
+name: Publish archiet-microcodegen-flask to PyPI
+
+# Triggered on a git tag of the form flask-v*.*.* (e.g. flask-v0.1.0).
+# Builds the wheel + sdist for archiet-microcodegen-flask and uploads to PyPI.
+#
+# Founder setup (one-time):
+#   1. Create a PyPI API token at https://pypi.org/manage/account/token/
+#      (scope: "Entire account" for first publish; tighten to project after)
+#   2. Add it to this repo's secrets as PYPI_API_TOKEN_FLASK
+#   3. Tag a release: git tag flask-v0.1.0 && git push origin flask-v0.1.0
+
+on:
+  push:
+    tags:
+      - "flask-v*.*.*"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Build only — do NOT upload to PyPI"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: pypi
+    timeout-minutes: 10
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Verify PYPI_API_TOKEN is set (fail loud if missing)
+        if: ${{ github.event.inputs.dry_run != 'true' }}
+        env:
+          PYPI_API_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
+        run: |
+          if [ -z "$PYPI_API_TOKEN" ]; then
+            echo "::error::PYPI_API_TOKEN secret is not set." >&2
+            echo "" >&2
+            echo "Add it at: https://github.com/$GITHUB_REPOSITORY/settings/secrets/actions/new" >&2
+            echo "Generate a token at: https://pypi.org/manage/account/token/" >&2
+            exit 1
+          fi
+          echo "PYPI_API_TOKEN present (length: ${#PYPI_API_TOKEN})"
+
+      - name: Install build tooling
+        run: python -m pip install --upgrade pip build twine
+
+      - name: Sanity-check Flask _core.py is present and parses
+        run: |
+          test -f archiet_microcodegen_flask/_core.py
+          python -c "import ast; ast.parse(open('archiet_microcodegen_flask/_core.py').read())"
+          echo "archiet_microcodegen_flask/_core.py parses cleanly."
+
+      - name: Activate Flask pyproject.toml (runner is ephemeral — safe to overwrite)
+        run: cp pyproject-flask.toml pyproject.toml
+
+      - name: Build wheel + sdist
+        run: python -m build
+
+      - name: Verify wheel contains Flask _core.py with the algorithm
+        run: |
+          set -e
+          WHEEL=$(ls dist/*.whl | head -1)
+          echo "Inspecting $WHEEL"
+          python -m zipfile -l "$WHEEL" | grep -E "_core\.py" || {
+            echo "::error::Wheel is missing archiet_microcodegen_flask/_core.py" >&2
+            exit 1
+          }
+          mkdir -p _wheel_check
+          python -m zipfile -e "$WHEEL" _wheel_check
+          grep -q "def microcodegen" _wheel_check/archiet_microcodegen_flask/_core.py
+          grep -q "def parse_prd" _wheel_check/archiet_microcodegen_flask/_core.py
+          grep -q "def render_genome" _wheel_check/archiet_microcodegen_flask/_core.py
+          grep -q "Flask" _wheel_check/archiet_microcodegen_flask/_core.py
+          echo "Wheel contents verified."
+
+      - name: Twine check (metadata + long_description rendering)
+        run: python -m twine check dist/*
+
+      - name: Publish to PyPI
+        if: ${{ github.event.inputs.dry_run != 'true' }}
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          password: ${{ secrets.PYPI_API_TOKEN }}
+          skip-existing: true
+
+      - name: Dry-run notice
+        if: ${{ github.event.inputs.dry_run == 'true' }}
+        run: |
+          echo "::notice::dry_run=true — wheel built but NOT uploaded to PyPI."
+          echo "Artifacts:"
+          ls -la dist/
+
+      - name: Upload built artifacts (for inspection)
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-flask
+          path: dist/*
+          retention-days: 30

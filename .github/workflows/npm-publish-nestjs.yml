@@ -1,0 +1,90 @@
+name: Publish archiet-microcodegen-nestjs to npm
+
+# Triggered on a git tag of the form nestjs-v*.*.* (e.g. nestjs-v0.1.0).
+# Builds and publishes archiet-microcodegen-nestjs to the npm registry.
+#
+# Founder setup (one-time):
+#   1. Create an npm Publish token at https://www.npmjs.com/settings/<user>/tokens
+#   2. Add it to this repo as secret: NPM_TOKEN
+#   3. Tag a release: git tag nestjs-v0.1.0 && git push origin nestjs-v0.1.0
+#
+# workflow_dispatch is ALWAYS dry-run — production publishes require a tag push.
+
+on:
+  push:
+    tags:
+      - "nestjs-v*.*.*"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Build + pack only — do NOT publish to npm"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          registry-url: https://registry.npmjs.org
+
+      - name: Verify package files exist
+        run: |
+          test -d archiet_microcodegen_nestjs
+          test -f archiet_microcodegen_nestjs/package.json
+          test -f archiet_microcodegen_nestjs/bin/archiet-microcodegen-nestjs.js
+
+      - name: Assert tag version equals package.json version
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          PKG_VER=$(node -p "require('./archiet_microcodegen_nestjs/package.json').version")
+          TAG_VER="${GITHUB_REF_NAME#nestjs-v}"
+          echo "package.json: $PKG_VER  tag: $TAG_VER"
+          [ "$PKG_VER" = "$TAG_VER" ] || {
+            echo "::error::Version mismatch — bump package.json version to $TAG_VER before tagging."
+            exit 1
+          }
+
+      - name: Syntax-check generator
+        run: node --check archiet_microcodegen_nestjs/bin/archiet-microcodegen-nestjs.js
+
+      - name: npm pack dry-run — verify tarball contents
+        working-directory: archiet_microcodegen_nestjs
+        run: |
+          npm pack --dry-run 2>&1 | tee /tmp/pack.txt
+          grep -q "archiet-microcodegen-nestjs.js" /tmp/pack.txt || {
+            echo "::error::Packed tarball missing bin/archiet-microcodegen-nestjs.js"; exit 1;
+          }
+          echo "Tarball OK."
+
+      - name: Verify NPM_TOKEN secret is set
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ -z "$NPM_TOKEN" ]; then
+            echo "::error::NPM_TOKEN secret is not set." >&2
+            echo "Add it at https://github.com/$GITHUB_REPOSITORY/settings/secrets/actions/new" >&2
+            exit 1
+          fi
+          echo "NPM_TOKEN present (${#NPM_TOKEN} chars)"
+
+      - name: Publish to npm
+        if: startsWith(github.ref, 'refs/tags/')
+        working-directory: archiet_microcodegen_nestjs
+        run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Dry-run notice
+        if: github.event_name == 'workflow_dispatch'
+        run: echo "::notice::dry_run=true — verified but NOT published to npm."

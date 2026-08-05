@@ -1,0 +1,109 @@
+name: Publish archiet-microcodegen-rails to RubyGems
+
+# Triggered on a git tag of the form rails-v*.*.* (e.g. rails-v0.1.0).
+# Builds and pushes the archiet-microcodegen-rails gem to rubygems.org.
+#
+# Founder setup (one-time):
+#   1. Create an API key at https://rubygems.org/profile/api_keys
+#      (scope: Push rubygems)
+#   2. Add it as repo secret: GEM_HOST_API_KEY
+#   3. Tag a release: git tag rails-v0.1.0 && git push origin rails-v0.1.0
+
+on:
+  push:
+    tags:
+      - "rails-v*.*.*"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Build gem only — do NOT push to RubyGems"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Ruby 3.2
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.2"
+
+      - name: Verify gem source files exist
+        run: |
+          test -f archiet_microcodegen_rails/archiet-microcodegen-rails.gemspec
+          test -f archiet_microcodegen_rails/lib/archiet_microcodegen_rails.rb
+          test -f archiet_microcodegen_rails/bin/archiet-microcodegen-rails
+
+      - name: Syntax-check Ruby generator
+        run: ruby -c archiet_microcodegen_rails/lib/archiet_microcodegen_rails.rb
+
+      - name: Assert gemspec version matches tag
+        if: startsWith(github.ref, 'refs/tags/')
+        working-directory: archiet_microcodegen_rails
+        run: |
+          GEM_VER=$(ruby -e "require 'rubygems'; s=Gem::Specification.load('archiet-microcodegen-rails.gemspec'); puts s.version")
+          TAG_VER="${GITHUB_REF_NAME#rails-v}"
+          echo "gemspec: $GEM_VER  tag: $TAG_VER"
+          [ "$GEM_VER" = "$TAG_VER" ] || {
+            echo "::error::Version mismatch — update s.version in the gemspec to $TAG_VER before tagging."
+            exit 1
+          }
+
+      - name: Build gem
+        working-directory: archiet_microcodegen_rails
+        run: |
+          gem build archiet-microcodegen-rails.gemspec
+          ls -la *.gem
+
+      - name: Verify gem contents
+        working-directory: archiet_microcodegen_rails
+        run: |
+          GEM_FILE=$(ls *.gem | head -1)
+          gem contents "$GEM_FILE" --remote 2>/dev/null || gem unpack "$GEM_FILE" --target /tmp/gem-inspect
+          find /tmp/gem-inspect -name "archiet_microcodegen_rails.rb" | grep -q . || \
+            ( gem contents "$GEM_FILE" 2>/dev/null | grep -q "archiet_microcodegen_rails.rb" ) || {
+            echo "::error::Gem is missing lib/archiet_microcodegen_rails.rb"; exit 1;
+          }
+          echo "Gem contents verified."
+
+      - name: Verify GEM_HOST_API_KEY is set
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GEM_HOST_API_KEY: ${{ secrets.GEM_HOST_API_KEY }}
+        run: |
+          if [ -z "$GEM_HOST_API_KEY" ]; then
+            echo "::error::GEM_HOST_API_KEY secret is not set." >&2
+            echo "Create at https://rubygems.org/profile/api_keys" >&2
+            exit 1
+          fi
+          echo "GEM_HOST_API_KEY present (${#GEM_HOST_API_KEY} chars)"
+
+      - name: Push gem to RubyGems
+        if: startsWith(github.ref, 'refs/tags/')
+        working-directory: archiet_microcodegen_rails
+        env:
+          GEM_HOST_API_KEY: ${{ secrets.GEM_HOST_API_KEY }}
+        run: |
+          GEM_FILE=$(ls *.gem | head -1)
+          gem push "$GEM_FILE" || {
+            # "You have already pushed this version" is acceptable
+            [[ "$(gem push $GEM_FILE 2>&1)" == *"already been pushed"* ]] && echo "::notice::Version already pushed — skipping." || exit 1
+          }
+
+      - name: Upload gem artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: archiet-microcodegen-rails-gem
+          path: archiet_microcodegen_rails/*.gem
+          retention-days: 30
+
+      - name: Dry-run notice
+        if: github.event_name == 'workflow_dispatch'
+        run: echo "::notice::dry_run=true — gem built but NOT pushed to RubyGems."
