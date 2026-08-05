@@ -1,0 +1,33 @@
+{
+  "name": "archiet-microcodegen-nestjs",
+  "version": "0.1.0",
+  "description": "PRD text → working NestJS TypeScript app → ZIP. Pure Node stdlib. Zero deps. <1400 LOC.",
+  "main": "bin/archiet-microcodegen-nestjs.js",
+  "bin": {
+    "archiet-microcodegen-nestjs": "bin/archiet-microcodegen-nestjs.js"
+  },
+  "scripts": {
+    "test": "node bin/archiet-microcodegen-nestjs.js --help"
+  },
+  "keywords": [
+    "nestjs",
+    "codegen",
+    "prd",
+    "scaffolding",
+    "archiet",
+    "microcodegen",
+    "api-generator",
+    "typescript"
+  ],
+  "author": "Aniekan Okono <founder@archiet.com>",
+  "license": "MIT",
+  "dependencies": {},
+  "engines": {
+    "node": ">=18"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/aniekanasuquookono-web/archiet"
+  },
+  "homepage": "https://archiet.com?utm_source=npm&utm_medium=package&utm_campaign=microcodegen-nestjs"
+}

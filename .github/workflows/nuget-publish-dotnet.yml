@@ -1,0 +1,107 @@
+name: Publish archiet-microcodegen-dotnet to NuGet
+
+# Triggered on a git tag of the form dotnet-v*.*.* (e.g. dotnet-v0.1.0).
+# Packs and publishes archiet-microcodegen-dotnet as a dotnet global tool to nuget.org.
+#
+# Install after publish:
+#   dotnet tool install -g archiet-microcodegen-dotnet
+#   archiet-microcodegen-dotnet prd.md --out ./out/
+#
+# Founder setup (one-time):
+#   1. Create an API key at https://www.nuget.org/account/apikeys
+#      (scope: Push new packages and package versions)
+#   2. Add it as repo secret: NUGET_API_KEY
+#   3. Tag a release: git tag dotnet-v0.1.0 && git push origin dotnet-v0.1.0
+
+on:
+  push:
+    tags:
+      - "dotnet-v*.*.*"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Pack only — do NOT push to NuGet"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Verify project files exist
+        run: |
+          test -f archiet_microcodegen_dotnet/archiet-microcodegen-dotnet.csproj
+          test -f archiet_microcodegen_dotnet/Program.cs
+
+      - name: Assert csproj version matches tag
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          CSPROJ_VER=$(grep '<Version>' archiet_microcodegen_dotnet/archiet-microcodegen-dotnet.csproj | sed 's/.*<Version>\(.*\)<\/Version>.*/\1/' | tr -d ' ')
+          TAG_VER="${GITHUB_REF_NAME#dotnet-v}"
+          echo "csproj: $CSPROJ_VER  tag: $TAG_VER"
+          [ "$CSPROJ_VER" = "$TAG_VER" ] || {
+            echo "::error::Version mismatch — update <Version> in csproj to $TAG_VER before tagging."
+            exit 1
+          }
+
+      - name: Pack NuGet tool package
+        run: |
+          dotnet pack archiet_microcodegen_dotnet/archiet-microcodegen-dotnet.csproj \
+            --configuration Release \
+            --output ./nupkg
+
+      - name: Verify NuGet package
+        run: |
+          NUPKG=$(ls nupkg/*.nupkg | head -1)
+          test -n "$NUPKG" || { echo "::error::.nupkg not found"; exit 1; }
+          echo "Package: $NUPKG"
+          # Install dotnet-unzip inspection tool
+          unzip -l "$NUPKG" | grep -E "\.nuspec|tools/" || {
+            echo "::error::.nupkg is missing .nuspec or tools/ directory"; exit 1;
+          }
+          echo "NuGet package verified."
+
+      - name: Verify NUGET_API_KEY is set
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+        run: |
+          if [ -z "$NUGET_API_KEY" ]; then
+            echo "::error::NUGET_API_KEY secret is not set." >&2
+            echo "Create at https://www.nuget.org/account/apikeys" >&2
+            exit 1
+          fi
+          echo "NUGET_API_KEY present"
+
+      - name: Push to NuGet
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+        run: |
+          NUPKG=$(ls nupkg/*.nupkg | head -1)
+          dotnet nuget push "$NUPKG" \
+            --api-key "$NUGET_API_KEY" \
+            --source https://api.nuget.org/v3/index.json \
+            --skip-duplicate
+
+      - name: Upload .nupkg artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: archiet-microcodegen-dotnet-nupkg
+          path: nupkg/*.nupkg
+          retention-days: 30
+
+      - name: Dry-run notice
+        if: github.event_name == 'workflow_dispatch'
+        run: echo "::notice::dry_run=true — .nupkg built but NOT pushed to NuGet."

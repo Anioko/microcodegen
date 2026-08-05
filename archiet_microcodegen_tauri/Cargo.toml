@@ -1,0 +1,23 @@
+[package]
+name = "archiet-microcodegen-tauri"
+version = "0.1.0"
+edition = "2021"
+description = "PRD text → Tauri v2 desktop app → ZIP. Pure Rust stdlib. Zero dependencies."
+license = "MIT"
+repository = "https://github.com/aniekanasuquookono-web/archiet"
+homepage = "https://archiet.com?utm_source=crates.io&utm_medium=package&utm_campaign=microcodegen-tauri"
+documentation = "https://docs.rs/archiet-microcodegen-tauri"
+keywords = ["tauri", "codegen", "desktop", "sqlite", "scaffold"]
+categories = ["command-line-utilities", "development-tools"]
+readme = "README.md"
+
+[[bin]]
+name = "archiet-microcodegen-tauri"
+path = "src/main.rs"
+
+[dependencies]
+# Zero — pure Rust stdlib only
+
+[profile.release]
+opt-level = "s"
+strip = true

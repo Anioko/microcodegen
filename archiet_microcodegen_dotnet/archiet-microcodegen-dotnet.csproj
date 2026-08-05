@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>archiet-microcodegen-dotnet</AssemblyName>
+    <PackAsTool>true</PackAsTool>
+    <ToolCommandName>archiet-microcodegen-dotnet</ToolCommandName>
+    <PackageId>archiet-microcodegen-dotnet</PackageId>
+    <Version>0.1.0</Version>
+    <Description>PRD text -&gt; ASP.NET Core 8 app -&gt; ZIP. Pure .NET BCL. Zero LLM calls.</Description>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageProjectUrl>https://archiet.com?utm_source=nuget&amp;utm_medium=package&amp;utm_campaign=microcodegen-dotnet</PackageProjectUrl>
+    <PackageTags>aspnetcore;codegen;scaffold;archiet;rest-api;generator</PackageTags>
+  </PropertyGroup>
+</Project>

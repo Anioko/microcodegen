@@ -1,0 +1,138 @@
+name: mcp-archiet — Publish to PyPI
+
+on:
+  push:
+    tags:
+      - "mcp-v*.*.*"
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Git ref (tag or sha) to build & publish"
+        required: false
+        default: ""
+
+concurrency:
+  group: pypi-publish-mcp-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-publish:
+    name: Build & publish mcp-archiet
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/project/mcp-archiet/
+    defaults:
+      run:
+        working-directory: mcp_archiet
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.ref || github.ref }}
+          fetch-depth: 1
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install build tooling
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install build twine
+
+      - name: Verify tag matches pyproject version
+        if: startsWith(github.ref, 'refs/tags/mcp-v')
+        run: |
+          TAG_VERSION="${GITHUB_REF_NAME#mcp-v}"
+          PKG_VERSION=$(python -c "import tomllib,pathlib;print(tomllib.loads(pathlib.Path('pyproject.toml').read_text())['project']['version'])")
+          if [ "$TAG_VERSION" != "$PKG_VERSION" ]; then
+            echo "::error::Tag version ($TAG_VERSION) does not match pyproject.toml version ($PKG_VERSION)"
+            exit 1
+          fi
+          echo "Tag $GITHUB_REF_NAME matches pyproject version $PKG_VERSION"
+
+      - name: Build sdist + wheel
+        run: python -m build
+
+      - name: Validate distributions
+        run: python -m twine check dist/*
+
+      - name: Upload distributions as workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: mcp-archiet-${{ github.ref_name }}
+          path: mcp_archiet/dist/*
+          retention-days: 30
+
+      - name: Verify PYPI_API_TOKEN_MICROCODEGEN is set (fail loud if missing)
+        env:
+          PYPI_API_TOKEN_MICROCODEGEN: ${{ secrets.PYPI_API_TOKEN_MICROCODEGEN }}
+        run: |
+          if [ -z "$PYPI_API_TOKEN_MICROCODEGEN" ]; then
+            echo "::error::PYPI_API_TOKEN_MICROCODEGEN secret is not set." >&2
+            exit 1
+          fi
+          echo "PYPI_API_TOKEN_MICROCODEGEN present (length: ${#PYPI_API_TOKEN_MICROCODEGEN})"
+
+      - name: Publish to PyPI
+        env:
+          TWINE_USERNAME: __token__
+          TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN_MICROCODEGEN }}
+        run: python -m twine upload --non-interactive --skip-existing dist/*
+
+  publish-to-mcp-registry:
+    name: Publish to MCP Registry
+    needs: build-and-publish
+    runs-on: ubuntu-latest
+    # Only auto-publish to the registry on tag pushes. The README-PR submission
+    # path is retired (2026-05) — registry uses mcp-publisher CLI + github-oidc.
+    if: startsWith(github.ref, 'refs/tags/mcp-v')
+    permissions:
+      contents: read
+      # id-token: write is REQUIRED for mcp-publisher's github-oidc auth.
+      # The token's sub claim ties the workflow to repo aniekanasuquookono-web/archiet,
+      # which grants the io.github.aniekanasuquookono-web/* namespace.
+      id-token: write
+    defaults:
+      run:
+        working-directory: mcp_archiet
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.ref || github.ref }}
+          fetch-depth: 1
+
+      - name: Wait for PyPI to index the new version
+        # PyPI typically indexes within seconds, but the registry validator
+        # checks the package exists + the README's mcp-name: marker matches.
+        # 90s is the published-recommended grace window.
+        run: sleep 90
+
+      - name: Install mcp-publisher CLI
+        run: |
+          MCP_PUBLISHER_VERSION="v1.7.9"
+          curl -sSL \
+            "https://github.com/modelcontextprotocol/registry/releases/download/${MCP_PUBLISHER_VERSION}/mcp-publisher_linux_amd64.tar.gz" \
+            | tar -xz mcp-publisher
+          sudo mv mcp-publisher /usr/local/bin/mcp-publisher
+          mcp-publisher --version || mcp-publisher --help | head -1
+
+      - name: Validate server.json
+        run: mcp-publisher validate
+
+      - name: Authenticate with MCP Registry (GitHub OIDC)
+        run: mcp-publisher login github-oidc
+
+      - name: Publish to MCP Registry
+        run: mcp-publisher publish
+
+      - name: Confirm listing
+        run: |
+          echo "Server published. Verify at:"
+          echo "  https://registry.modelcontextprotocol.io/servers/io.github.aniekanasuquookono-web/archiet"
